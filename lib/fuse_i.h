@@ -15,6 +15,7 @@ struct fuse_req {
 	struct fuse_session *se;
 	uint64_t unique;
 	int ctr;
+	int opcode;
 	pthread_mutex_t lock;
 	struct fuse_ctx ctx;
 	struct fuse_chan *ch;
@@ -29,6 +30,8 @@ struct fuse_req {
 			void *data;
 		} ni;
 	} u;
+	struct timespec ts1;
+	struct timespec ts2;
 	struct fuse_req *next;
 	struct fuse_req *prev;
 };
@@ -65,6 +68,10 @@ struct fuse_session {
 	struct fuse_notify_req notify_list;
 	size_t bufsize;
 	int error;
+
+	pthread_spinlock_t spinlock; /* protects the array */
+	long long unsigned int processing[46][33];
+	char *statsDir;
 };
 
 struct fuse_chan {

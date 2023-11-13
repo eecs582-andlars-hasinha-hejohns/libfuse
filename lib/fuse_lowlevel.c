@@ -18,6 +18,7 @@
 #include "fuse_misc.h"
 #include "mount_util.h"
 
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -49,6 +50,38 @@ struct fuse_pollhandle {
 };
 
 static size_t pagesize;
+
+void populate_time(fuse_req_t req) {
+	struct timespec *ts1, *ts2;
+	struct fuse_session *se;
+	
+	ts1 = &(req->ts1);
+	ts2 = &(req->ts2);
+	se = req->se;
+/*  long time = (ts2->tv_sec*1000000 + ts2->tv_nsec/1000) - (ts1->tv_sec*1000000 + ts1->tv_nsec/1000); */
+	long time = (ts2->tv_sec*1000000000 + ts2->tv_nsec) - (ts1->tv_sec*1000000000 + ts1->tv_nsec);
+	
+	pthread_spin_lock(&se->spinlock); /*lock*/
+    int i;
+    for (i=1; i<33; i++){
+        if(time>>i == 0){
+            se->processing[req->opcode][i-1] +=1;
+			pthread_spin_unlock(&se->spinlock); /*unlock*/
+			return;
+        }
+    }
+	se->processing[req->opcode][32] +=1;
+	pthread_spin_unlock(&se->spinlock); /*unlock*/
+}
+
+void generate_start_time(fuse_req_t req) {
+	clock_gettime(CLOCK_MONOTONIC, &(req->ts1));
+}
+
+void generate_end_time(fuse_req_t req) {
+	clock_gettime(CLOCK_MONOTONIC, &(req->ts2));
+}
+
 
 static __attribute__((constructor)) void fuse_ll_init_pagesize(void)
 {
@@ -323,6 +356,8 @@ static int send_reply_ok(fuse_req_t req, const void *arg, size_t argsize)
 
 int fuse_reply_err(fuse_req_t req, int err)
 {
+    //	clock_gettime(CLOCK_MONOTONIC, &(req->ts2)); /*Track the completion of req*/
+    //	populate_time(&(req->ts1), &(req->ts2), req);    /*Add the diff to session*/
 	return send_reply(req, -err, NULL, 0);
 }
 
@@ -425,6 +460,9 @@ int fuse_reply_entry(fuse_req_t req, const struct fuse_entry_param *e)
 	if (!e->ino && req->se->conn.proto_minor < 4)
 		return fuse_reply_err(req, ENOENT);
 
+//	clock_gettime(CLOCK_MONOTONIC, &(req->ts2)); /*Track the completion of req*/
+//	populate_time(&(req->ts1), &(req->ts2), req);    /*Add the diff to session*/
+
 	memset(&arg, 0, sizeof(arg));
 	fill_entry(&arg, e);
 	return send_reply_ok(req, &arg, size);
@@ -438,6 +476,9 @@ int fuse_reply_create(fuse_req_t req, const struct fuse_entry_param *e,
 		FUSE_COMPAT_ENTRY_OUT_SIZE : sizeof(struct fuse_entry_out);
 	struct fuse_entry_out *earg = (struct fuse_entry_out *) buf;
 	struct fuse_open_out *oarg = (struct fuse_open_out *) (buf + entrysize);
+
+//	clock_gettime(CLOCK_MONOTONIC, &(req->ts2)); /*Track the completion of req*/
+//	populate_time(&(req->ts1), &(req->ts2), req);    /*Add the diff to session*/
 
 	memset(buf, 0, sizeof(buf));
 	fill_entry(earg, e);
@@ -453,6 +494,9 @@ int fuse_reply_attr(fuse_req_t req, const struct stat *attr,
 	size_t size = req->se->conn.proto_minor < 9 ?
 		FUSE_COMPAT_ATTR_OUT_SIZE : sizeof(arg);
 
+//	clock_gettime(CLOCK_MONOTONIC, &(req->ts2)); /*Track the completion of req*/
+//	populate_time(&(req->ts1), &(req->ts2), req);    /*Add the diff to session*/
+
 	memset(&arg, 0, sizeof(arg));
 	arg.attr_valid = calc_timeout_sec(attr_timeout);
 	arg.attr_valid_nsec = calc_timeout_nsec(attr_timeout);
@@ -463,12 +507,17 @@ int fuse_reply_attr(fuse_req_t req, const struct stat *attr,
 
 int fuse_reply_readlink(fuse_req_t req, const char *linkname)
 {
+//	clock_gettime(CLOCK_MONOTONIC, &(req->ts2)); /*Track the completion of req*/
+//	populate_time(&(req->ts1), &(req->ts2), req);    /*Add the diff to session*/
 	return send_reply_ok(req, linkname, strlen(linkname));
 }
 
 int fuse_reply_open(fuse_req_t req, const struct fuse_file_info *f)
 {
 	struct fuse_open_out arg;
+
+//	clock_gettime(CLOCK_MONOTONIC, &(req->ts2)); /*Track the completion of req*/
+//	populate_time(&(req->ts1), &(req->ts2), req);    /*Add the diff to session*/
 
 	memset(&arg, 0, sizeof(arg));
 	fill_open(&arg, f);
@@ -478,6 +527,9 @@ int fuse_reply_open(fuse_req_t req, const struct fuse_file_info *f)
 int fuse_reply_write(fuse_req_t req, size_t count)
 {
 	struct fuse_write_out arg;
+
+//	clock_gettime(CLOCK_MONOTONIC, &(req->ts2)); /*Track the completion of req*/
+//	populate_time(&(req->ts1), &(req->ts2), req);    /*Add the diff to session*/
 
 	memset(&arg, 0, sizeof(arg));
 	arg.size = count;
@@ -877,6 +929,9 @@ int fuse_reply_data(fuse_req_t req, struct fuse_bufvec *bufv,
 	struct iovec iov[2];
 	struct fuse_out_header out;
 	int res;
+
+//	clock_gettime(CLOCK_MONOTONIC, &(req->ts2)); /*Track the completion of req*/
+//	populate_time(&(req->ts1), &(req->ts2), req);    /*Add the diff to session*/
 
 	iov[0].iov_base = &out;
 	iov[0].iov_len = sizeof(struct fuse_out_header);
@@ -2657,6 +2712,7 @@ void fuse_session_process_buf_int(struct fuse_session *se,
 	int err;
 	int res;
 
+	printf("Size of write header and fuse write in structure is : %zu\n", write_header_size);
 	if (buf->flags & FUSE_BUF_IS_FD) {
 		if (buf->size < tmpbuf.buf[0].size)
 			tmpbuf.buf[0].size = buf->size;
@@ -2701,10 +2757,13 @@ void fuse_session_process_buf_int(struct fuse_session *se,
 	}
 
 	req->unique = in->unique;
+	req->opcode = in->opcode; /*To track the req along with the opcode*/
 	req->ctx.uid = in->uid;
 	req->ctx.gid = in->gid;
 	req->ctx.pid = in->pid;
 	req->ch = ch ? fuse_chan_get(ch) : NULL;
+
+//	clock_gettime(CLOCK_MONOTONIC, &(req->ts1)); /*Start of the req creation*/
 
 	err = EIO;
 	if (!se->got_init) {
@@ -2829,6 +2888,7 @@ void fuse_session_destroy(struct fuse_session *se)
 	if (se->io != NULL)
 		free(se->io);
 	destroy_mount_opts(se->mo);
+	pthread_spin_destroy(&se->spinlock);
 	free(se);
 }
 
@@ -3092,6 +3152,7 @@ struct fuse_session *fuse_session_new(struct fuse_args *args,
 	se->userdata = userdata;
 
 	se->mo = mo;
+	pthread_spin_init(&se->spinlock, PTHREAD_PROCESS_PRIVATE); /*For array*/
 	return se;
 
 out5:
@@ -3105,6 +3166,21 @@ out2:
 	free(se);
 out1:
 	return NULL;
+}
+
+void fuse_session_add_statsDir(struct fuse_session *se, char *statsdir)
+{
+	se->statsDir = statsdir;
+}
+
+void fuse_session_remove_statsDir(struct fuse_session *se)
+{
+	se->statsDir = NULL;
+}
+
+char *fuse_session_statsDir(struct fuse_session *se)
+{
+	return se->statsDir;
 }
 
 int fuse_session_custom_io(struct fuse_session *se, const struct fuse_custom_io *io,

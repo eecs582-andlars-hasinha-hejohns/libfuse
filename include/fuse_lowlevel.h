@@ -1283,6 +1283,38 @@ struct fuse_lowlevel_ops {
 };
 
 /**
+ * Function to initialise the request start time
+ * */
+void generate_start_time(fuse_req_t req);
+
+/** 
+ *Function to initialise the request end time
+ * */
+void generate_end_time(fuse_req_t req);
+
+/**
+ * Function to track the difference of the timings and 
+ * store it in the fuse session object
+ * */
+void populate_time(fuse_req_t req);
+
+/**
+* Assign statistics directory passed by user to the session.
+*/
+void fuse_session_add_statsDir(struct fuse_session *se, char *statsdir);
+
+/**
+*Remove the statistics directory assigned by the user
+*/
+void fuse_session_remove_statsDir(struct fuse_session *se);
+
+/**
+*Return the statistics directory assigned by the user
+*/
+char *fuse_session_statsDir(struct fuse_session *se);
+
+
+/**
  * Reply with an error code or success.
  *
  * Possible requests:
